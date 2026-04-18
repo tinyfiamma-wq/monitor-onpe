@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import requests
 import json
 import os
@@ -13,10 +14,7 @@ HEADERS = {"User-Agent": "Mozilla/5.0"}
 
 def enviar_a_cpanel(historial):
     try:
-        payload = json.dumps({
-            "token": SECRET_TOKEN,
-            "data":  historial
-        }, ensure_ascii=False)
+        payload = json.dumps({"token": SECRET_TOKEN, "data": historial}, ensure_ascii=False)
         resp = requests.post(
             RECEPTOR_URL,
             data=payload,
@@ -35,11 +33,31 @@ def obtener_datos():
         res_c = requests.get(URL_CANDIDATOS, headers=HEADERS, timeout=15)
         res_c.raise_for_status()
         data_c = res_c.json()
-        c = {cand['nombreAgrupacionPolitica']: cand for cand in data_c.get('data', [])}
 
-        v_rla   = int(c.get("RENOVACION POPULAR",        {}).get("totalVotosValidos", 0))
-        v_rs    = int(c.get("JUNTOS POR EL PERU",         {}).get("totalVotosValidos", 0))
-        v_nieto = int(c.get("PARTIDO DEL BUEN GOBIERNO",  {}).get("totalVotosValidos", 0))
+        # Buscar por nombre con y sin tildes para máxima compatibilidad
+        c = {}
+        for cand in data_c.get('data', []):
+            nombre = cand.get('nombreAgrupacionPolitica', '')
+            c[nombre] = cand
+
+        # Debug: mostrar todos los nombres recibidos
+        print("Partidos en API: %s" % [k for k in c.keys() if 'POPULAR' in k or 'PERU' in k or 'BUEN' in k])
+
+        # Buscar con tildes (nombre real en API)
+        v_rla   = int(c.get("RENOVA\u00c9I\u00d3N POPULAR",       c.get("RENOVACI\u00d3N POPULAR",      c.get("RENOVACION POPULAR",      {}))).get("totalVotosValidos", 0))
+        v_rs    = int(c.get("JUNTOS POR EL PER\u00da",            c.get("JUNTOS POR EL PERU",            {})).get("totalVotosValidos", 0))
+        v_nieto = int(c.get("PARTIDO DEL BUEN GOBIERNO",          {}).get("totalVotosValidos", 0))
+
+        # Búsqueda flexible por substring como fallback
+        for nombre, cand in c.items():
+            if 'RENOVACI' in nombre and v_rla == 0:
+                v_rla = int(cand.get("totalVotosValidos", 0))
+            if 'JUNTOS' in nombre and v_rs == 0:
+                v_rs = int(cand.get("totalVotosValidos", 0))
+            if 'BUEN GOBIERNO' in nombre and v_nieto == 0:
+                v_nieto = int(cand.get("totalVotosValidos", 0))
+
+        print("Votos - RLA: %d | RS: %d | Nieto: %d" % (v_rla, v_rs, v_nieto))
 
         res_t = requests.get(URL_TOTALES, headers=HEADERS, timeout=15)
         res_t.raise_for_status()
@@ -111,7 +129,9 @@ def obtener_datos():
         enviar_a_cpanel(historial)
 
     except Exception as e:
+        import traceback
         print("[ERROR] %s" % e)
+        traceback.print_exc()
 
 if __name__ == "__main__":
     obtener_datos()
