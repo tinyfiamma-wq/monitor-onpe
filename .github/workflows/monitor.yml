@@ -1,0 +1,22 @@
+name: Monitor Electoral ONPE
+
+on:
+  schedule:
+    - cron: '* * * * *'   # cada 1 minuto (repo publico = minutos ilimitados)
+  workflow_dispatch:        # permite ejecutar manualmente desde GitHub
+
+jobs:
+  monitorear:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Instalar dependencias
+        run: pip install requests
+
+      - name: Ejecutar monitor
+        env:
+          RECEPTOR_URL: ${{ secrets.RECEPTOR_URL }}
+          SECRET_TOKEN: ${{ secrets.SECRET_TOKEN }}
+        run: python monitor_votos.py
