@@ -19,4 +19,5 @@ jobs:
         env:
           RECEPTOR_URL: ${{ secrets.RECEPTOR_URL }}
           SECRET_TOKEN: ${{ secrets.SECRET_TOKEN }}
+          JSON_URL: ${{ secrets.JSON_URL }}
         run: python monitor_votos.py
