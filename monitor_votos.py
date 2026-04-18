@@ -3,12 +3,9 @@ import json
 import os
 from datetime import datetime
 
-# ─── CONFIGURACIÓN (viene de variables de entorno en GitHub Actions) ──
 RECEPTOR_URL = os.environ.get("RECEPTOR_URL", "")
 SECRET_TOKEN = os.environ.get("SECRET_TOKEN", "")
-
-# JSON local temporal (dentro del repo, se regenera en cada run)
-JSON_FILE = "datos_votos.json"
+JSON_FILE    = "datos_votos.json"
 
 URL_CANDIDATOS = "https://onpe-needle.linderhassinger.dev/api/onpe/candidates"
 URL_TOTALES    = "https://onpe-needle.linderhassinger.dev/api/onpe/totals"
@@ -16,20 +13,25 @@ HEADERS = {"User-Agent": "Mozilla/5.0"}
 
 def enviar_a_cpanel(historial):
     try:
-        resp = requests.post(RECEPTOR_URL, data={
+        payload = json.dumps({
             "token": SECRET_TOKEN,
-            "data":  json.dumps(historial, ensure_ascii=False)
-        }, timeout=15)
+            "data":  historial
+        }, ensure_ascii=False)
+        resp = requests.post(
+            RECEPTOR_URL,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            timeout=15
+        )
         if resp.status_code == 200:
             print("  -> Enviado a cPanel OK: %s" % resp.text)
         else:
-            print("  -> Error cPanel: %s %s" % (resp.status_code, resp.text))
+            print("  -> Error cPanel: %s %s" % (resp.status_code, resp.text[:200]))
     except Exception as e:
         print("  -> Fallo envio cPanel: %s" % e)
 
 def obtener_datos():
     try:
-        # 1. Votos por candidato
         res_c = requests.get(URL_CANDIDATOS, headers=HEADERS, timeout=15)
         res_c.raise_for_status()
         data_c = res_c.json()
@@ -39,7 +41,6 @@ def obtener_datos():
         v_rs    = int(c.get("JUNTOS POR EL PERU",         {}).get("totalVotosValidos", 0))
         v_nieto = int(c.get("PARTIDO DEL BUEN GOBIERNO",  {}).get("totalVotosValidos", 0))
 
-        # 2. Totales / avance de actas
         res_t = requests.get(URL_TOTALES, headers=HEADERS, timeout=15)
         res_t.raise_for_status()
         data_t = res_t.json()
@@ -48,16 +49,12 @@ def obtener_datos():
         contabilizadas = d.get("contabilizadas", 0)
         dif_actual     = abs(v_rla - v_rs)
 
-        # 3. Leer historial local del repo
         historial = []
         if os.path.exists(JSON_FILE):
             with open(JSON_FILE, 'r', encoding='utf-8') as f:
-                try:
-                    historial = json.load(f)
-                except Exception:
-                    historial = []
+                try:    historial = json.load(f)
+                except: historial = []
 
-        # Recuperar ultimo estado
         if historial:
             ultimo             = historial[-1]
             mem_rla            = ultimo.get("rla", 0)
@@ -67,25 +64,18 @@ def obtener_datos():
         else:
             mem_rla = mem_rs = mem_contabilizadas = mem_dif_absoluta = 0
 
-        # 4. Hay cambios?
-        hay_cambio = (
-            v_rla != mem_rla or
-            v_rs  != mem_rs  or
-            contabilizadas != mem_contabilizadas
-        )
+        hay_cambio = (v_rla != mem_rla or v_rs != mem_rs or contabilizadas != mem_contabilizadas)
 
         if not hay_cambio:
             print("[%s] Sin cambios." % datetime.now().strftime('%H:%M:%S'))
             return
 
-        # 5. Calcular puestos
         ranking = sorted(
             [{"id": "rs", "votos": v_rs}, {"id": "rla", "votos": v_rla}, {"id": "nieto", "votos": v_nieto}],
             key=lambda x: x['votos'], reverse=True
         )
         puestos = {item['id']: idx + 2 for idx, item in enumerate(ranking)}
 
-        # 6. Calcular trend
         cambio_brecha = mem_dif_absoluta - dif_actual
         lider = "RLA" if v_rla > v_rs else "SANCHEZ"
 
@@ -99,7 +89,6 @@ def obtener_datos():
         else:
             trend = "SIN CAMBIOS EN LA BRECHA"
 
-        # 7. Armar registro
         registro = {
             "hora":           datetime.now().strftime("%H:%M:%S"),
             "rla":            v_rla,   "puesto_rla":   puestos['rla'],
@@ -115,14 +104,10 @@ def obtener_datos():
         }
 
         historial.append(registro)
-
-        # 8. Guardar JSON local (para que el siguiente run lo lea)
         with open(JSON_FILE, 'w', encoding='utf-8') as f:
             json.dump(historial, f, indent=4, ensure_ascii=False)
 
         print("[%s] %s" % (registro['hora'], trend))
-
-        # 9. Enviar historial completo al receptor PHP en cPanel
         enviar_a_cpanel(historial)
 
     except Exception as e:
