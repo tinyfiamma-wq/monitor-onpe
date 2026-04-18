@@ -10,11 +10,26 @@ def ahora(): return datetime.now(TZ_PERU)
 
 RECEPTOR_URL = os.environ.get("RECEPTOR_URL", "")
 SECRET_TOKEN = os.environ.get("SECRET_TOKEN", "")
-JSON_FILE    = "datos_votos.json"
+
+# URL pública del JSON en cPanel (para leer el historial)
+JSON_URL = os.environ.get("JSON_URL", "")
 
 URL_CANDIDATOS = "https://onpe-needle.linderhassinger.dev/api/onpe/candidates"
 URL_TOTALES    = "https://onpe-needle.linderhassinger.dev/api/onpe/totals"
 HEADERS = {"User-Agent": "Mozilla/5.0"}
+
+def leer_historial_cpanel():
+    """Lee el historial actual desde el JSON público en cPanel."""
+    try:
+        resp = requests.get(JSON_URL + "?t=" + str(ahora().timestamp()), timeout=15)
+        if resp.status_code == 200:
+            data = resp.json()
+            if isinstance(data, list):
+                print("  -> Historial leído: %d registros" % len(data))
+                return data
+    except Exception as e:
+        print("  -> No se pudo leer historial: %s" % e)
+    return []
 
 def enviar_a_cpanel(historial):
     try:
@@ -34,48 +49,34 @@ def enviar_a_cpanel(historial):
 
 def obtener_datos():
     try:
+        # 1. Votos por candidato
         res_c = requests.get(URL_CANDIDATOS, headers=HEADERS, timeout=15)
         res_c.raise_for_status()
         data_c = res_c.json()
-
-        # Buscar por nombre con y sin tildes para máxima compatibilidad
         c = {}
         for cand in data_c.get('data', []):
-            nombre = cand.get('nombreAgrupacionPolitica', '')
-            c[nombre] = cand
+            c[cand.get('nombreAgrupacionPolitica', '')] = cand
 
-        # Debug: mostrar todos los nombres recibidos
-        print("Partidos en API: %s" % [k for k in c.keys() if 'POPULAR' in k or 'PERU' in k or 'BUEN' in k])
-
-        # Buscar con tildes (nombre real en API)
-        v_rla   = int(c.get("RENOVA\u00c9I\u00d3N POPULAR",       c.get("RENOVACI\u00d3N POPULAR",      c.get("RENOVACION POPULAR",      {}))).get("totalVotosValidos", 0))
-        v_rs    = int(c.get("JUNTOS POR EL PER\u00da",            c.get("JUNTOS POR EL PERU",            {})).get("totalVotosValidos", 0))
-        v_nieto = int(c.get("PARTIDO DEL BUEN GOBIERNO",          {}).get("totalVotosValidos", 0))
-
-        # Búsqueda flexible por substring como fallback
+        v_rla = v_rs = v_nieto = 0
         for nombre, cand in c.items():
-            if 'RENOVACI' in nombre and v_rla == 0:
-                v_rla = int(cand.get("totalVotosValidos", 0))
-            if 'JUNTOS' in nombre and v_rs == 0:
-                v_rs = int(cand.get("totalVotosValidos", 0))
-            if 'BUEN GOBIERNO' in nombre and v_nieto == 0:
+            if 'RENOVACI' in nombre:
+                v_rla   = int(cand.get("totalVotosValidos", 0))
+            if 'JUNTOS' in nombre:
+                v_rs    = int(cand.get("totalVotosValidos", 0))
+            if 'BUEN GOBIERNO' in nombre:
                 v_nieto = int(cand.get("totalVotosValidos", 0))
 
         print("Votos - RLA: %d | RS: %d | Nieto: %d" % (v_rla, v_rs, v_nieto))
 
+        # 2. Totales
         res_t = requests.get(URL_TOTALES, headers=HEADERS, timeout=15)
         res_t.raise_for_status()
-        data_t = res_t.json()
-        d = data_t.get("data", {})
-
+        d = res_t.json().get("data", {})
         contabilizadas = d.get("contabilizadas", 0)
         dif_actual     = abs(v_rla - v_rs)
 
-        historial = []
-        if os.path.exists(JSON_FILE):
-            with open(JSON_FILE, 'r', encoding='utf-8') as f:
-                try:    historial = json.load(f)
-                except: historial = []
+        # 3. Leer historial desde cPanel (la memoria real)
+        historial = leer_historial_cpanel()
 
         if historial:
             ultimo             = historial[-1]
@@ -86,18 +87,21 @@ def obtener_datos():
         else:
             mem_rla = mem_rs = mem_contabilizadas = mem_dif_absoluta = 0
 
+        # 4. Hay cambios?
         hay_cambio = (v_rla != mem_rla or v_rs != mem_rs or contabilizadas != mem_contabilizadas)
 
         if not hay_cambio:
             print("[%s] Sin cambios." % ahora().strftime('%H:%M:%S'))
             return
 
+        # 5. Puestos
         ranking = sorted(
-            [{"id": "rs", "votos": v_rs}, {"id": "rla", "votos": v_rla}, {"id": "nieto", "votos": v_nieto}],
+            [{"id":"rs","votos":v_rs},{"id":"rla","votos":v_rla},{"id":"nieto","votos":v_nieto}],
             key=lambda x: x['votos'], reverse=True
         )
         puestos = {item['id']: idx + 2 for idx, item in enumerate(ranking)}
 
+        # 6. Trend
         cambio_brecha = mem_dif_absoluta - dif_actual
         lider = "RLA" if v_rla > v_rs else "SANCHEZ"
 
@@ -111,6 +115,7 @@ def obtener_datos():
         else:
             trend = "SIN CAMBIOS EN LA BRECHA"
 
+        # 7. Nuevo registro
         registro = {
             "hora":           ahora().strftime("%H:%M:%S"),
             "rla":            v_rla,   "puesto_rla":   puestos['rla'],
@@ -126,10 +131,9 @@ def obtener_datos():
         }
 
         historial.append(registro)
-        with open(JSON_FILE, 'w', encoding='utf-8') as f:
-            json.dump(historial, f, indent=4, ensure_ascii=False)
-
         print("[%s] %s" % (registro['hora'], trend))
+
+        # 8. Enviar historial completo a cPanel
         enviar_a_cpanel(historial)
 
     except Exception as e:
