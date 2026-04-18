@@ -3,6 +3,10 @@ import requests
 import json
 import os
 from datetime import datetime
+from zoneinfo import ZoneInfo
+
+TZ_PERU = ZoneInfo("America/Lima")
+def ahora(): return datetime.now(TZ_PERU)
 
 RECEPTOR_URL = os.environ.get("RECEPTOR_URL", "")
 SECRET_TOKEN = os.environ.get("SECRET_TOKEN", "")
@@ -85,7 +89,7 @@ def obtener_datos():
         hay_cambio = (v_rla != mem_rla or v_rs != mem_rs or contabilizadas != mem_contabilizadas)
 
         if not hay_cambio:
-            print("[%s] Sin cambios." % datetime.now().strftime('%H:%M:%S'))
+            print("[%s] Sin cambios." % ahora().strftime('%H:%M:%S'))
             return
 
         ranking = sorted(
@@ -108,7 +112,7 @@ def obtener_datos():
             trend = "SIN CAMBIOS EN LA BRECHA"
 
         registro = {
-            "hora":           datetime.now().strftime("%H:%M:%S"),
+            "hora":           ahora().strftime("%H:%M:%S"),
             "rla":            v_rla,   "puesto_rla":   puestos['rla'],
             "rs":             v_rs,    "puesto_rs":    puestos['rs'],
             "nieto":          v_nieto, "puesto_nieto": puestos['nieto'],
