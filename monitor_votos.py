@@ -118,6 +118,7 @@ def obtener_datos():
         # 7. Nuevo registro
         registro = {
             "hora":           ahora().strftime("%H:%M:%S"),
+            "fecha":          ahora().strftime("%d/%m/%Y"),
             "rla":            v_rla,   "puesto_rla":   puestos['rla'],
             "rs":             v_rs,    "puesto_rs":    puestos['rs'],
             "nieto":          v_nieto, "puesto_nieto": puestos['nieto'],
