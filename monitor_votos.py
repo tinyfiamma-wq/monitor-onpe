@@ -10,26 +10,48 @@ def ahora(): return datetime.now(TZ_PERU)
 
 RECEPTOR_URL = os.environ.get("RECEPTOR_URL", "")
 SECRET_TOKEN = os.environ.get("SECRET_TOKEN", "")
-
-# URL pública del JSON en cPanel (para leer el historial)
-JSON_URL = os.environ.get("JSON_URL", "")
+JSON_URL     = os.environ.get("JSON_URL", "")
 
 URL_CANDIDATOS = "https://onpe-needle.linderhassinger.dev/api/onpe/candidates"
 URL_TOTALES    = "https://onpe-needle.linderhassinger.dev/api/onpe/totals"
 HEADERS = {"User-Agent": "Mozilla/5.0"}
 
+# Mínimo de registros que debe tener el historial para considerarlo válido
+MIN_REGISTROS_VALIDOS = 3
+
 def leer_historial_cpanel():
-    """Lee el historial actual desde el JSON público en cPanel."""
-    try:
-        resp = requests.get(JSON_URL + "?t=" + str(ahora().timestamp()), timeout=15)
-        if resp.status_code == 200:
-            data = resp.json()
-            if isinstance(data, list):
-                print("  -> Historial leído: %d registros" % len(data))
-                return data
-    except Exception as e:
-        print("  -> No se pudo leer historial: %s" % e)
-    return []
+    """
+    Lee el historial desde cPanel con protección anti-pérdida:
+    - Reintenta hasta 3 veces si falla
+    - Rechaza respuestas con muy pocos registros (señal de caché vacío)
+    - Solo devuelve None si definitivamente no pudo leer (para abortar el run)
+    """
+    for intento in range(3):
+        try:
+            url = JSON_URL + "?t=" + str(ahora().timestamp())
+            resp = requests.get(url, timeout=15)
+            if resp.status_code != 200:
+                print("  -> Intento %d: HTTP %d" % (intento+1, resp.status_code))
+                continue
+
+            texto = resp.text.strip()
+            if not texto or texto == "[]" or texto == "null":
+                print("  -> Intento %d: respuesta vacía" % (intento+1))
+                continue
+
+            data = json.loads(texto)
+            if not isinstance(data, list):
+                print("  -> Intento %d: no es lista" % (intento+1))
+                continue
+
+            print("  -> Historial leído: %d registros (intento %d)" % (len(data), intento+1))
+            return data
+
+        except Exception as e:
+            print("  -> Intento %d error: %s" % (intento+1, e))
+
+    # Si llegamos aquí, los 3 intentos fallaron
+    return None
 
 def enviar_a_cpanel(historial):
     try:
@@ -42,10 +64,13 @@ def enviar_a_cpanel(historial):
         )
         if resp.status_code == 200:
             print("  -> Enviado a cPanel OK: %s" % resp.text)
+            return True
         else:
             print("  -> Error cPanel: %s %s" % (resp.status_code, resp.text[:200]))
+            return False
     except Exception as e:
         print("  -> Fallo envio cPanel: %s" % e)
+        return False
 
 def obtener_datos():
     try:
@@ -75,8 +100,13 @@ def obtener_datos():
         contabilizadas = d.get("contabilizadas", 0)
         dif_actual     = abs(v_rla - v_rs)
 
-        # 3. Leer historial desde cPanel (la memoria real)
+        # 3. Leer historial desde cPanel (con protección)
         historial = leer_historial_cpanel()
+
+        # PROTECCIÓN ANTI-PÉRDIDA: si no se pudo leer el historial, abortar
+        if historial is None:
+            print("[ABORTADO] No se pudo leer el historial después de 3 intentos. Se omite esta ejecución para no sobrescribir datos.")
+            return
 
         if historial:
             ultimo             = historial[-1]
